@@ -8,7 +8,6 @@
   <script src="https://cdnjs.cloudflare.com/ajax/libs/react-dom/18.3.1/umd/react-dom.production.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/babel-standalone/7.23.5/babel.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
-  <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
   <script type="module">
     import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
     import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot, updateDoc, deleteDoc, query } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore.js";
@@ -40,28 +39,6 @@
 <div id="root"></div>
 <script type="text/babel">
 const { useState, useEffect, useCallback, useRef } = React;
-
-    // ── EMAILJS OTP ────────────────────────────────────────────────────────────
-    const EMAILJS_PUBLIC_KEY = "kJ9M0u0FNvVdJprjc";
-    const EMAILJS_SERVICE_ID = "service_810ieom";
-    const EMAILJS_TEMPLATE_ID = "template_9fotv8t";
-    emailjs.init(EMAILJS_PUBLIC_KEY);
-    const otpStore = {};
-    function generateOTP() { return String(Math.floor(100000 + Math.random() * 900000)); }
-    async function sendOTP(email, name) {
-      const code = generateOTP();
-      otpStore[email] = { code, expires: Date.now() + 10 * 60 * 1000 };
-      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-        to_email: email, to_name: name.split(" ")[0], otp: code,
-      });
-    }
-    function verifyOTP(email, input) {
-      const e = otpStore[email];
-      if (!e) return "no_otp";
-      if (Date.now() > e.expires) { delete otpStore[email]; return "expired"; }
-      if (e.code !== input.trim()) return "wrong";
-      delete otpStore[email]; return "ok";
-    }
 
 
 // ── EMPLOYEE DATA (source of truth for org structure) ──────────────────────
@@ -170,60 +147,22 @@ function Loading({ msg="Connecting to database…" }) {
 // ── LOGIN ──────────────────────────────────────────────────────────────────
 function Login({ onLogin, employees }) {
   const [email, setEmail] = useState("");
-  const [step, setStep] = useState("email");
-  const [otp, setOtp] = useState("");
   const [err, setErr] = useState("");
-  const [loading, setLoading] = useState(false);
-  const [cooldown, setCooldown] = useState(0);
-  const [resolvedUser, setResolvedUser] = useState(null);
 
-  useEffect(() => {
-    if (cooldown <= 0) return;
-    const t = setTimeout(() => setCooldown(c => c - 1), 1000);
-    return () => clearTimeout(t);
-  }, [cooldown]);
-
-  const resolve = (trimmed) => {
-    if (trimmed === ADMIN_EMAIL.toLowerCase())
-      return { empId: ADMIN_ID, role: "admin", name: "Aswin K R", email: trimmed };
-    const found = employees.find(e => e.email && e.email.toLowerCase() === trimmed);
-    if (!found) return null;
-    const role = getDirectReports(found.id, employees).length > 0 ? "manager" : "employee";
-    return { empId: found.id, role, name: found.name, email: trimmed };
-  };
-
-  const handleSend = async () => {
-    const trimmed = email.trim().toLowerCase();
-    if (!trimmed) { setErr("Enter your work email."); return; }
-    const user = resolve(trimmed);
-    if (!user) { setErr("Email not recognised. Use your Entri work email or contact Aswin."); return; }
-    setLoading(true); setErr("");
-    try {
-      await sendOTP(trimmed, user.name);
-      setResolvedUser(user);
-      setStep("otp");
-      setCooldown(30);
-    } catch(e) {
-      setErr("Could not send OTP. Check your EmailJS template has {{to_email}} in the To field.");
+  const go = () => {
+    const t = email.trim().toLowerCase();
+    if (!t) { setErr("Enter your work email."); return; }
+    if (t === ADMIN_EMAIL.toLowerCase()) {
+      onLogin({ empId:ADMIN_ID, role:"admin", name:"Aswin K R", email:t });
+      return;
     }
-    setLoading(false);
-  };
-
-  const handleVerify = () => {
-    if (!otp.trim()) { setErr("Enter the 6-digit code."); return; }
-    const r = verifyOTP(resolvedUser.email, otp);
-    if (r === "ok") { onLogin(resolvedUser); }
-    else if (r === "expired") { setErr("Code expired. Request a new one."); setStep("email"); setOtp(""); }
-    else if (r === "wrong") { setErr("Incorrect code. Check your inbox and try again."); }
-    else { setErr("No active code. Click Send OTP again."); }
-  };
-
-  const handleResend = async () => {
-    if (cooldown > 0) return;
-    setLoading(true); setErr("");
-    try { await sendOTP(resolvedUser.email, resolvedUser.name); setCooldown(30); }
-    catch { setErr("Resend failed. Try again."); }
-    setLoading(false);
+    const found = employees.find(e => e.email && e.email.toLowerCase() === t);
+    if (found) {
+      const role = getDirectReports(found.id, employees).length > 0 ? "manager" : "employee";
+      onLogin({ empId:found.id, role, name:found.name, email:t });
+      return;
+    }
+    setErr("Email not recognised. Use your Entri work email or contact Aswin.");
   };
 
   return (
@@ -232,49 +171,15 @@ function Login({ onLogin, employees }) {
         <div style={{ fontSize:10, fontWeight:700, color:C.grey, letterSpacing:"1.2px", textTransform:"uppercase", marginBottom:8 }}>ENTRI SOFTWARE</div>
         <div style={S.h1}>Performance Review</div>
         <div style={{ color:C.grey, fontSize:13, marginTop:3, marginBottom:24 }}>Mid-Year 2025 · Learning & Impact</div>
-
-        {step === "email" && (
-          <>
-            <label style={S.lbl}>Work email</label>
-            <input style={{ ...S.inp, marginBottom:12 }} placeholder="yourname@entri.me" value={email}
-              onChange={e=>{setEmail(e.target.value);setErr("");}}
-              onKeyDown={e=>e.key==="Enter"&&!loading&&handleSend()}
-              type="email" autoFocus />
-            {err && <div style={S.alert("err")}>{err}</div>}
-            <button style={{ ...S.btn("pri"), width:"100%", opacity:loading?0.6:1 }} onClick={handleSend} disabled={loading}>
-              {loading ? "Sending code…" : "Send OTP →"}
-            </button>
-            <div style={{ fontSize:11, color:"#94a3b8", marginTop:14, textAlign:"center" }}>A 6-digit code will be sent to your Entri inbox.</div>
-          </>
-        )}
-
-        {step === "otp" && (
-          <>
-            <div style={{ ...S.alert("info"), fontSize:13, marginBottom:14 }}>
-              Code sent to <strong>{resolvedUser?.email}</strong>. Check your inbox — expires in 10 minutes.
-            </div>
-            <label style={S.lbl}>6-digit code</label>
-            <input
-              style={{ ...S.inp, fontSize:28, letterSpacing:10, textAlign:"center", fontWeight:700, padding:"12px", marginBottom:12 }}
-              placeholder="000000" value={otp}
-              onChange={e=>{setOtp(e.target.value.replace(/[^0-9]/g,"").slice(0,6));setErr("");}}
-              onKeyDown={e=>e.key==="Enter"&&handleVerify()}
-              maxLength={6} inputMode="numeric" autoFocus />
-            {err && <div style={S.alert("err")}>{err}</div>}
-            <button style={{ ...S.btn("pri"), width:"100%", marginBottom:10 }} onClick={handleVerify}>
-              Verify & sign in →
-            </button>
-            <div style={{ display:"flex", justifyContent:"space-between", alignItems:"center" }}>
-              <button style={{ background:"none", border:"none", cursor:"pointer", fontSize:12, color:C.grey, padding:0 }}
-                onClick={()=>{setStep("email");setOtp("");setErr("");}}>← Change email</button>
-              <button style={{ background:"none", border:"none", cursor:cooldown>0?"default":"pointer",
-                fontSize:12, color:cooldown>0?"#94a3b8":"#0284c7", padding:0 }}
-                onClick={handleResend} disabled={cooldown>0||loading}>
-                {loading?"Sending…":cooldown>0?`Resend in ${cooldown}s`:"Resend code"}
-              </button>
-            </div>
-          </>
-        )}
+        <label style={S.lbl}>Work email</label>
+        <input style={{ ...S.inp, marginBottom:12 }} placeholder="yourname@entri.me"
+          value={email} onChange={e=>{setEmail(e.target.value);setErr("");}}
+          onKeyDown={e=>e.key==="Enter"&&go()} type="email" autoFocus />
+        {err && <div style={S.alert("err")}>{err}</div>}
+        <button style={{ ...S.btn("pri"), width:"100%" }} onClick={go}>Sign in →</button>
+        <div style={{ fontSize:11, color:"#94a3b8", marginTop:14, textAlign:"center" }}>
+          Enter your Entri work email to access your review.
+        </div>
       </div>
     </div>
   );
